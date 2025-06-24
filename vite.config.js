@@ -3,221 +3,224 @@ import react from '@vitejs/plugin-react';
 import { createLogger, defineConfig } from 'vite';
 
 const isDev = process.env.NODE_ENV !== 'production';
-let inlineEditPlugin, editModeDevPlugin;
 
-if (isDev) {
-	inlineEditPlugin = (await import('./plugins/visual-editor/vite-plugin-react-inline-editor.js')).default;
-	editModeDevPlugin = (await import('./plugins/visual-editor/vite-plugin-edit-mode.js')).default;
-}
+export default defineConfig(async () => {
+  let inlineEditPlugin, editModeDevPlugin;
 
-const configHorizonsViteErrorHandler = `
-const observer = new MutationObserver((mutations) => {
-	for (const mutation of mutations) {
-		for (const addedNode of mutation.addedNodes) {
-			if (
-				addedNode.nodeType === Node.ELEMENT_NODE &&
-				(
-					addedNode.tagName?.toLowerCase() === 'vite-error-overlay' ||
-					addedNode.classList?.contains('backdrop')
-				)
-			) {
-				handleViteOverlay(addedNode);
-			}
-		}
-	}
-});
+  if (isDev) {
+    inlineEditPlugin = (await import('./plugins/visual-editor/vite-plugin-react-inline-editor.js')).default;
+    editModeDevPlugin = (await import('./plugins/visual-editor/vite-plugin-edit-mode.js')).default;
+  }
 
-observer.observe(document.documentElement, {
-	childList: true,
-	subtree: true
-});
+  const configHorizonsViteErrorHandler = `
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const addedNode of mutation.addedNodes) {
+        if (
+          addedNode.nodeType === Node.ELEMENT_NODE &&
+          (
+            addedNode.tagName?.toLowerCase() === 'vite-error-overlay' ||
+            addedNode.classList?.contains('backdrop')
+          )
+        ) {
+          handleViteOverlay(addedNode);
+        }
+      }
+    }
+  });
 
-function handleViteOverlay(node) {
-	if (!node.shadowRoot) {
-		return;
-	}
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
 
-	const backdrop = node.shadowRoot.querySelector('.backdrop');
+  function handleViteOverlay(node) {
+    if (!node.shadowRoot) {
+      return;
+    }
 
-	if (backdrop) {
-		const overlayHtml = backdrop.outerHTML;
-		const parser = new DOMParser();
-		const doc = parser.parseFromString(overlayHtml, 'text/html');
-		const messageBodyElement = doc.querySelector('.message-body');
-		const fileElement = doc.querySelector('.file');
-		const messageText = messageBodyElement ? messageBodyElement.textContent.trim() : '';
-		const fileText = fileElement ? fileElement.textContent.trim() : '';
-		const error = messageText + (fileText ? ' File:' + fileText : '');
+    const backdrop = node.shadowRoot.querySelector('.backdrop');
 
-		window.parent.postMessage({
-			type: 'horizons-vite-error',
-			error,
-		}, '*');
-	}
-}
-`;
+    if (backdrop) {
+      const overlayHtml = backdrop.outerHTML;
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(overlayHtml, 'text/html');
+      const messageBodyElement = doc.querySelector('.message-body');
+      const fileElement = doc.querySelector('.file');
+      const messageText = messageBodyElement ? messageBodyElement.textContent.trim() : '';
+      const fileText = fileElement ? fileElement.textContent.trim() : '';
+      const error = messageText + (fileText ? ' File:' + fileText : '');
 
-const configHorizonsRuntimeErrorHandler = `
-window.onerror = (message, source, lineno, colno, errorObj) => {
-	const errorDetails = errorObj ? JSON.stringify({
-		name: errorObj.name,
-		message: errorObj.message,
-		stack: errorObj.stack,
-		source,
-		lineno,
-		colno,
-	}) : null;
+      window.parent.postMessage({
+        type: 'horizons-vite-error',
+        error,
+      }, '*');
+    }
+  }
+  `;
 
-	window.parent.postMessage({
-		type: 'horizons-runtime-error',
-		message,
-		error: errorDetails
-	}, '*');
-};
-`;
+  const configHorizonsRuntimeErrorHandler = `
+  window.onerror = (message, source, lineno, colno, errorObj) => {
+    const errorDetails = errorObj ? JSON.stringify({
+      name: errorObj.name,
+      message: errorObj.message,
+      stack: errorObj.stack,
+      source,
+      lineno,
+      colno,
+    }) : null;
 
-const configHorizonsConsoleErrroHandler = `
-const originalConsoleError = console.error;
-console.error = function(...args) {
-	originalConsoleError.apply(console, args);
+    window.parent.postMessage({
+      type: 'horizons-runtime-error',
+      message,
+      error: errorDetails
+    }, '*');
+  };
+  `;
 
-	let errorString = '';
+  const configHorizonsConsoleErrroHandler = `
+  const originalConsoleError = console.error;
+  console.error = function(...args) {
+    originalConsoleError.apply(console, args);
 
-	for (let i = 0; i < args.length; i++) {
-		const arg = args[i];
-		if (arg instanceof Error) {
-			errorString = arg.stack || \`\${arg.name}: \${arg.message}\`;
-			break;
-		}
-	}
+    let errorString = '';
 
-	if (!errorString) {
-		errorString = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
-	}
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg instanceof Error) {
+        errorString = arg.stack || \`\${arg.name}: \${arg.message}\`;
+        break;
+      }
+    }
 
-	window.parent.postMessage({
-		type: 'horizons-console-error',
-		error: errorString
-	}, '*');
-};
-`;
+    if (!errorString) {
+      errorString = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+    }
 
-const configWindowFetchMonkeyPatch = `
-const originalFetch = window.fetch;
+    window.parent.postMessage({
+      type: 'horizons-console-error',
+      error: errorString
+    }, '*');
+  };
+  `;
 
-window.fetch = function(...args) {
-	const url = args[0] instanceof Request ? args[0].url : args[0];
+  const configWindowFetchMonkeyPatch = `
+  const originalFetch = window.fetch;
 
-	// Skip WebSocket URLs
-	if (url.startsWith('ws:') || url.startsWith('wss:')) {
-		return originalFetch.apply(this, args);
-	}
+  window.fetch = function(...args) {
+    const url = args[0] instanceof Request ? args[0].url : args[0];
 
-	return originalFetch.apply(this, args)
-		.then(async response => {
-			const contentType = response.headers.get('Content-Type') || '';
+    // Skip WebSocket URLs
+    if (url.startsWith('ws:') || url.startsWith('wss:')) {
+      return originalFetch.apply(this, args);
+    }
 
-			// Exclude HTML document responses
-			const isDocumentResponse =
-				contentType.includes('text/html') ||
-				contentType.includes('application/xhtml+xml');
+    return originalFetch.apply(this, args)
+      .then(async response => {
+        const contentType = response.headers.get('Content-Type') || '';
 
-			if (!response.ok && !isDocumentResponse) {
-					const responseClone = response.clone();
-					const errorFromRes = await responseClone.text();
-					const requestUrl = response.url;
-					console.error(\`Fetch error from \${requestUrl}: \${errorFromRes}\`);
-			}
+        // Exclude HTML document responses
+        const isDocumentResponse =
+          contentType.includes('text/html') ||
+          contentType.includes('application/xhtml+xml');
 
-			return response;
-		})
-		.catch(error => {
-			if (!url.match(/\.html?$/i)) {
-				console.error(error);
-			}
+        if (!response.ok && !isDocumentResponse) {
+            const responseClone = response.clone();
+            const errorFromRes = await responseClone.text();
+            const requestUrl = response.url;
+            console.error(\`Fetch error from \${requestUrl}: \${errorFromRes}\`);
+        }
 
-			throw error;
-		});
-};
-`;
+        return response;
+      })
+      .catch(error => {
+        if (!url.match(/\\.html?$/i)) {
+          console.error(error);
+        }
 
-const addTransformIndexHtml = {
-	name: 'add-transform-index-html',
-	transformIndexHtml(html) {
-		return {
-			html,
-			tags: [
-				{
-					tag: 'script',
-					attrs: { type: 'module' },
-					children: configHorizonsRuntimeErrorHandler,
-					injectTo: 'head',
-				},
-				{
-					tag: 'script',
-					attrs: { type: 'module' },
-					children: configHorizonsViteErrorHandler,
-					injectTo: 'head',
-				},
-				{
-					tag: 'script',
-					attrs: {type: 'module'},
-					children: configHorizonsConsoleErrroHandler,
-					injectTo: 'head',
-				},
-				{
-					tag: 'script',
-					attrs: { type: 'module' },
-					children: configWindowFetchMonkeyPatch,
-					injectTo: 'head',
-				},
-			],
-		};
-	},
-};
+        throw error;
+      });
+  };
+  `;
 
-console.warn = () => {};
+  const addTransformIndexHtml = {
+    name: 'add-transform-index-html',
+    transformIndexHtml(html) {
+      return {
+        html,
+        tags: [
+          {
+            tag: 'script',
+            attrs: { type: 'module' },
+            children: configHorizonsRuntimeErrorHandler,
+            injectTo: 'head',
+          },
+          {
+            tag: 'script',
+            attrs: { type: 'module' },
+            children: configHorizonsViteErrorHandler,
+            injectTo: 'head',
+          },
+          {
+            tag: 'script',
+            attrs: { type: 'module' },
+            children: configHorizonsConsoleErrroHandler,
+            injectTo: 'head',
+          },
+          {
+            tag: 'script',
+            attrs: { type: 'module' },
+            children: configWindowFetchMonkeyPatch,
+            injectTo: 'head',
+          },
+        ],
+      };
+    },
+  };
 
-const logger = createLogger()
-const loggerError = logger.error
+  console.warn = () => {};
 
-logger.error = (msg, options) => {
-	if (options?.error?.toString().includes('CssSyntaxError: [postcss]')) {
-		return;
-	}
+  const logger = createLogger();
+  const loggerError = logger.error;
 
-	loggerError(msg, options);
-}
+  logger.error = (msg, options) => {
+    if (options?.error?.toString().includes('CssSyntaxError: [postcss]')) {
+      return;
+    }
 
-export default defineConfig({
-  base: '/mi-web/',  // Aquí el nombre exacto de tu repo en GitHub
-	customLogger: logger,
-	plugins: [
-		...(isDev ? [inlineEditPlugin(), editModeDevPlugin()] : []),
-		react(),
-		addTransformIndexHtml
-	],
-	server: {
-		cors: true,
-		headers: {
-			'Cross-Origin-Embedder-Policy': 'credentialless',
-		},
-		allowedHosts: true,
-	},
-	resolve: {
-		extensions: ['.jsx', '.js', '.tsx', '.ts', '.json'],
-		alias: {
-			'@': path.resolve(__dirname, './src'),
-		},
-	},
-	build: {
-		rollupOptions: {
-			external: [
-				'@babel/parser',
-				'@babel/traverse',
-				'@babel/generator',
-				'@babel/types'
-			]
-		}
-	}
+    loggerError(msg, options);
+  };
+
+  return {
+    base: '/mi-web/', // 👈 esto es clave para que funcione GitHub Pages
+    customLogger: logger,
+    plugins: [
+      ...(isDev ? [inlineEditPlugin(), editModeDevPlugin()] : []),
+      react(),
+      addTransformIndexHtml
+    ],
+    server: {
+      cors: true,
+      headers: {
+        'Cross-Origin-Embedder-Policy': 'credentialless',
+      },
+      allowedHosts: true,
+    },
+    resolve: {
+      extensions: ['.jsx', '.js', '.tsx', '.ts', '.json'],
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
+    },
+    build: {
+      rollupOptions: {
+        external: [
+          '@babel/parser',
+          '@babel/traverse',
+          '@babel/generator',
+          '@babel/types'
+        ]
+      }
+    }
+  };
 });
